@@ -1,0 +1,7 @@
+{
+    "api_keys": {
+        "discord_token": "replaceme",
+        "twitter_app_key": "replaceme",
+        "twitter_access_token": "replaceme"
+    }
+}

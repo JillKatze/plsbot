@@ -1,0 +1,4 @@
+[FORMAT]
+
+# who cares about console compatible line lengths, it's not 1992 - JK
+max-line-length=1000
