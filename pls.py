@@ -54,9 +54,15 @@ class Pls(discord.Client):
         # apply discord.client.event decorator to any callable attributes whose names start with "_event_", storing them with that prefix stripped.
         # there might be a less ugly way to do this but this is my workaround for not having a "self" to refer to in decorators
         #   and i'll die before i define a global client variable like in all the discord.py examples :3
-        for item in dir(self):
+        # also, i'm doing this ugly getattr thing because sometimes iterating over dir directly works and sometimes it doesn't, but using dir
+        #  to get the names of things as strings then using getattr does. computers are weird
+        for item in [getattr(self, key) for key in map(str, dir(self))]:
             if callable(item) and item.__name__.startswith("_event_"):
-                setattr(self, item.__name__.replace("_event_", ""), self.event(item))
+                new_name = item.__name__.replace("_event_", "")
+                setattr(self, new_name, self.event(item))
+                self._logger.info("Remapping callable {} to event handler {}.".format(item.__name__, new_name))
+
+        self._logger.info("plsbot successfully initialized.")
 
 
     def run(self, *args, **kwargs):
@@ -69,6 +75,7 @@ class Pls(discord.Client):
         # try to connect to twitter, but it's okay if we can't
         try:
             self._twitter = Twython(api_keys.get("twitter_app_key"), access_token=api_keys.get("twitter_access_token"))
+            self._logger.info("plsbot sucessfully connected to Twitter.")
         except:
             self._logger.exception("Could not connect to Twitter. Check your Twitter keyes in config.json.")
 
@@ -76,6 +83,7 @@ class Pls(discord.Client):
         token = api_keys.get("discord_token")
         assert token and token != "replaceme", "Discord token was not set in config.json. Please see documentation."
 
+        self._logger.info("plsbot connecting to Discord.")
         super().run(token)
 
 
@@ -91,17 +99,17 @@ class Pls(discord.Client):
         inside of Discord. Eventually, this will need to be better modularized.
         """
 
-        # if we couldn't connect to twitter, no point even trying anything :3
-        if self._twitter:
-            # this regex will match twitter status URLs, like this: https://twitter.com/JillKatze/status/981417200878804992
-            # from there, we can extract the ids we need to interact with them through the twitter api
-            # this will skip links that have their preview hidden with <angle brackets>
-            twitter_regex = re.compile(r"(?<!\<)(?:https?:\/\/(?:[^\.\s]*\.)?twitter\.com\/[^\s]*\/status\/(\d+)[^\s]*)(?!\>)")
-            tweet_ids = twitter_regex.findall(message.content.lower())
+        # this regex will match twitter status URLs, like this: https://twitter.com/JillKatze/status/981417200878804992
+        # from there, we can extract the ids we need to interact with them through the twitter api
+        # this will skip links that have their preview hidden with <angle brackets>
+        twitter_regex = re.compile(r"(?<!\<)(?:https?:\/\/(?:[^\.\s]*\.)?twitter\.com\/[^\s]*\/status\/(\d+)[^\s]*)(?!\>)")
+        tweet_ids = twitter_regex.findall(message.content.lower())
 
-            for tweet_id in tweet_ids:
-                self._logger.debug("Saw a tweet with id {}".format(tweet_id))
+        for tweet_id in tweet_ids:
+            self._logger.debug("Saw a tweet with id {}".format(tweet_id))
 
+            # if we couldn't connect to twitter, no point even trying anything  beyond here :3
+            if self._twitter:
                 tweet = None
                 try:
                     tweet = self._twitter.show_status(id=tweet_id)
@@ -129,4 +137,8 @@ class Pls(discord.Client):
 
 if __name__ == "__main__":
     pls = Pls()
-    pls.run()
+    try:
+        pls.run()
+    except:
+        logging.getLogger('discord').exception("Uncaught exception in run(). Exiting.")
+        exit()
