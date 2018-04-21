@@ -1,10 +1,10 @@
 import json
 import logging
 import os
-import re
 import sys
 
 import discord
+import regex as re
 from twython import Twython
 
 
@@ -62,6 +62,16 @@ class Pls(discord.Client):
                 setattr(self, new_name, self.event(item))
                 self._logger.info("Remapping callable {} to event handler {}.".format(item.__name__, new_name))
 
+        # compile regexes
+        # this regex will match twitter status URLs, like this: https://twitter.com/JillKatze/status/981417200878804992
+        # from there, we can extract the ids we need to interact with them through the twitter api
+        # this will skip links that have their preview hidden with <angle brackets>
+        self.twitter_id_regex = re.compile(r"(?<!\<)(?:https?:\/\/(?:[^\.\s]*\.)?twitter\.com\/[^\s]*\/status\/(\d+)[^\s]*)(?!\>)")
+
+        # Tweets with certain East Asian character sets take up more visual space than other character sets and Discord truncates their previews sooner,
+        #  from the perspective of string length. This regex will be used to guess if the heuristic for showing full tweets should lower its threshold.
+        self.ea_chars_regex = re.compile(r"[\p{Block=CJK}\p{Block=Hangul}\p{Block=Hiragana}\p{Block=Katakana}]", re.UNICODE)
+
         self._logger.info("plsbot successfully initialized.")
 
 
@@ -99,11 +109,7 @@ class Pls(discord.Client):
         inside of Discord. Eventually, this will need to be better modularized.
         """
 
-        # this regex will match twitter status URLs, like this: https://twitter.com/JillKatze/status/981417200878804992
-        # from there, we can extract the ids we need to interact with them through the twitter api
-        # this will skip links that have their preview hidden with <angle brackets>
-        twitter_regex = re.compile(r"(?<!\<)(?:https?:\/\/(?:[^\.\s]*\.)?twitter\.com\/[^\s]*\/status\/(\d+)[^\s]*)(?!\>)")
-        tweet_ids = twitter_regex.findall(message.content.lower())
+        tweet_ids = self.twitter_id_regex.findall(message.content.lower())
 
         for tweet_id in tweet_ids:
             self._logger.debug("Saw a tweet with id {}".format(tweet_id))
@@ -112,20 +118,34 @@ class Pls(discord.Client):
             if self._twitter:
                 tweet = None
                 try:
-                    tweet = self._twitter.show_status(id=tweet_id)
+                    tweet = self._twitter.show_status(id=tweet_id, tweet_mode="extended")
                 except:
                     self._logger.exception("Unable to load tweet.")
 
                 if tweet:
-                    # tweets are sometimes truncated, which means we need to request it again to get the full version
-                    # TODO: make this smart enough to skip sending when the only difference between truncated and untruncated is a t.co link at the end
-                    if tweet["truncated"]:
-                        try:
-                            tweet_ext = self._twitter.show_status(id=tweet_id, tweet_mode="extended")
-                            await self.send_message(message.channel, "Untruncated tweet:\n```{}```".format(tweet_ext["full_text"]))
-                            self._logger.debug("Sent untruncated version of tweet {}.".format(tweet_id))
-                        except:
-                            self._logger.exception("Unable to fetch extended version of truncated tweet.")
+                    # Discord truncates tweets in its previews in a somewhat unpredictable way that doesn't match the way Twitter's API does it,
+                    #  which appears to be based on visual space and not character count. This heurestically guesses if the tweet may have been
+                    #  truncated within its actual text
+
+                    # Remove any trailing t.co links
+                    tweet_words = tweet["full_text"].split(" ")
+                    while "https://t.co" in tweet_words[-1]:
+                        tweet_words = tweet_words[:-1]
+                    tweet_trailing_links_stripped = " ".join(tweet_words)
+
+                    # count how many EA characters are in the string
+                    ea_char_count = len(self.ea_chars_regex.findall(tweet_trailing_links_stripped))
+
+                    # If the majority of chars in the tweet are EA, use a smaller threshold.
+                    # These thresholds are based on some pretty arbitrary guesswork.
+                    if float(ea_char_count)/len(tweet_trailing_links_stripped) > 0.5:
+                        length_threshold = 95
+                    else:
+                        length_threshold = 230
+
+                    if len(tweet_trailing_links_stripped) > length_threshold:
+                        await self.send_message(message.channel, "Full tweet:\n```{}```".format(tweet["full_text"]))
+                        self._logger.debug("Sent untruncated version of tweet {}.".format(tweet_id))
 
                     # since discord will preview the first image from a tweet, grab any images beyond the first one and link them so they get previews
                     if tweet.get("extended_entities") and tweet["extended_entities"].get("media"):
