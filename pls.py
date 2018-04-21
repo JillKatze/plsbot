@@ -1,3 +1,4 @@
+import collections
 import json
 import logging
 import os
@@ -68,9 +69,8 @@ class Pls(discord.Client):
         # this will skip links that have their preview hidden with <angle brackets>
         self.twitter_id_regex = re.compile(r"(?<!\<)(?:https?:\/\/(?:[^\.\s]*\.)?twitter\.com\/[^\s]*\/status\/(\d+)[^\s]*)(?!\>)")
 
-        # Tweets with certain East Asian character sets take up more visual space than other character sets and Discord truncates their previews sooner,
-        #  from the perspective of string length. This regex will be used to guess if the heuristic for showing full tweets should lower its threshold.
-        self.ea_chars_regex = re.compile(r"[\p{Block=CJK}\p{Block=Hangul}\p{Block=Hiragana}\p{Block=Katakana}]", re.UNICODE)
+        # track which messages' embeds we've recently processed so we don't handle them multiple times
+        self._processed_embeds = collections.deque(maxlen=1000)
 
         self._logger.info("plsbot successfully initialized.")
 
@@ -103,56 +103,76 @@ class Pls(discord.Client):
         self._logger.info("Logged in as {0.name} ({0.id})".format(self.user))
 
 
+    def _load_tweet(self, tweet_id):
+        """Attempts to load a tweet from the twitter API. Returns None on failure.
+        """
+         # if we couldn't connect to twitter, no point even trying anything  beyond here :3
+        if self._twitter:
+            tweet = None
+            try:
+                tweet = self._twitter.show_status(id=tweet_id, tweet_mode="extended")
+            except:
+                self._logger.exception("Unable to load tweet.")
+            return tweet
+
+        return None
+
+
+    async def _process_embeds(self, message):
+        # Discord truncates tweets in its previews, but if we handle them here we can detect that and send the full tweet.
+        for embed in message.embeds:
+            if (message.id, embed) not in self._processed_embeds:
+                url = embed.get("url")
+
+                if url:
+                    tweet_ids = self.twitter_id_regex.findall(url.lower())
+                    for tweet_id in tweet_ids:
+                        self._logger.debug("Saw a new embed containing a tweet with id {}".format(tweet_id))
+
+                        tweet = self._load_tweet(tweet_id)
+
+                        if tweet:
+                            tweet_text = tweet["full_text"]
+
+                            # if a tweet has media attached, the final t.co link will be for those, and we should strip it
+                            if tweet.get("extended_entities") and tweet["extended_entities"].get("media"):
+                                tweet_text = tweet_text.rsplit(" https://t.co/", 1)[0]
+
+                            if tweet_text != embed.get("description", ""):
+                                await self.send_message(message.channel, "Full tweet:\n```{}```".format(tweet["full_text"]))
+                                self._logger.debug("Sent untruncated version of tweet {}.".format(tweet_id))
+
+            self._processed_embeds.append((message.id, embed))
+
+
     async def _event_on_message(self, message):
         """on_message event handler. For now, only contains code for processing twitter links for the sake of
         printing full versions of truncated tweets and inserting links to additional images so they get previews
         inside of Discord. Eventually, this will need to be better modularized.
         """
+        await self._process_embeds(message)
 
         tweet_ids = self.twitter_id_regex.findall(message.content.lower())
 
         for tweet_id in tweet_ids:
-            self._logger.debug("Saw a tweet with id {}".format(tweet_id))
+            self._logger.debug("Saw a new message containing a tweet with id {}".format(tweet_id))
+            tweet = self._load_tweet(tweet_id)
 
-            # if we couldn't connect to twitter, no point even trying anything  beyond here :3
-            if self._twitter:
-                tweet = None
-                try:
-                    tweet = self._twitter.show_status(id=tweet_id, tweet_mode="extended")
-                except:
-                    self._logger.exception("Unable to load tweet.")
+            if tweet:
+                # since discord will preview the first image from a tweet, grab any images beyond the first one and link them so they get previews
+                if tweet.get("extended_entities") and tweet["extended_entities"].get("media"):
+                    media_ids = [item["media_url_https"] for item in tweet["extended_entities"]["media"][1:] if item["type"] == "photo"]
+                    if media_ids:
+                        await self.send_message(message.channel, "Additional images from tweet: {}".format(" ".join(media_ids)))
+                        self._logger.debug("Sent extra image links for tweet {}.".format(tweet_id))
 
-                if tweet:
-                    # Discord truncates tweets in its previews in a somewhat unpredictable way that doesn't match the way Twitter's API does it,
-                    #  which appears to be based on visual space and not character count. This heurestically guesses if the tweet may have been
-                    #  truncated within its actual text
 
-                    # Remove any trailing t.co links
-                    tweet_words = tweet["full_text"].split(" ")
-                    while "https://t.co" in tweet_words[-1]:
-                        tweet_words = tweet_words[:-1]
-                    tweet_trailing_links_stripped = " ".join(tweet_words)
+    async def _event_on_message_edit(self, before, after):
+        """on_message_edit handler. This includes things such as the server appending an embed to a message.
+        """
+        self._logger.debug("message edit")
 
-                    # count how many EA characters are in the string
-                    ea_char_count = len(self.ea_chars_regex.findall(tweet_trailing_links_stripped))
-
-                    # If the majority of chars in the tweet are EA, use a smaller threshold.
-                    # These thresholds are based on some pretty arbitrary guesswork.
-                    if float(ea_char_count)/len(tweet_trailing_links_stripped) > 0.5:
-                        length_threshold = 95
-                    else:
-                        length_threshold = 240
-
-                    if len(tweet_trailing_links_stripped) > length_threshold:
-                        await self.send_message(message.channel, "Full tweet:\n```{}```".format(tweet["full_text"]))
-                        self._logger.debug("Sent untruncated version of tweet {}.".format(tweet_id))
-
-                    # since discord will preview the first image from a tweet, grab any images beyond the first one and link them so they get previews
-                    if tweet.get("extended_entities") and tweet["extended_entities"].get("media"):
-                        media_ids = [item["media_url_https"] for item in tweet["extended_entities"]["media"][1:] if item["type"] == "photo"]
-                        if media_ids:
-                            await self.send_message(message.channel, "Additional images from tweet: {}".format(" ".join(media_ids)))
-                            self._logger.debug("Sent extra image links for tweet {}.".format(tweet_id))
+        await self._process_embeds(after)
 
 
 if __name__ == "__main__":
