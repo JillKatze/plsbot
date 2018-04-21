@@ -1,3 +1,4 @@
+import asyncio
 import collections
 import json
 import logging
@@ -103,17 +104,18 @@ class Pls(discord.Client):
         self._logger.info("Logged in as {0.name} ({0.id})".format(self.user))
 
 
-    def _load_tweet(self, tweet_id):
+    async def _load_tweet(self, tweet_id, retries=5):
         """Attempts to load a tweet from the twitter API. Returns None on failure.
         """
          # if we couldn't connect to twitter, no point even trying anything  beyond here :3
         if self._twitter:
-            tweet = None
-            try:
-                tweet = self._twitter.show_status(id=tweet_id, tweet_mode="extended")
-            except:
-                self._logger.exception("Unable to load tweet.")
-            return tweet
+            while retries > 0:
+                retries -= 1
+                try:
+                    return self._twitter.show_status(id=tweet_id, tweet_mode="extended")
+                except:
+                    self._logger.exception("Unable to load tweet. {} attempts remaining.".format(retries))
+                await asyncio.sleep(1)
 
         return None
 
@@ -129,7 +131,7 @@ class Pls(discord.Client):
                     for tweet_id in tweet_ids:
                         self._logger.debug("Saw a new embed containing a tweet with id {}".format(tweet_id))
 
-                        tweet = self._load_tweet(tweet_id)
+                        tweet = await self._load_tweet(tweet_id)
 
                         if tweet:
                             tweet_text = tweet["full_text"]
@@ -156,7 +158,7 @@ class Pls(discord.Client):
 
         for tweet_id in tweet_ids:
             self._logger.debug("Saw a new message containing a tweet with id {}".format(tweet_id))
-            tweet = self._load_tweet(tweet_id)
+            tweet = await self._load_tweet(tweet_id)
 
             if tweet:
                 # since discord will preview the first image from a tweet, grab any images beyond the first one and link them so they get previews
@@ -170,8 +172,6 @@ class Pls(discord.Client):
     async def _event_on_message_edit(self, before, after):
         """on_message_edit handler. This includes things such as the server appending an embed to a message.
         """
-        self._logger.debug("message edit")
-
         await self._process_embeds(after)
 
 
