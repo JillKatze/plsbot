@@ -141,7 +141,7 @@ class Pls(discord.Client):
                     if float(ea_char_count)/len(tweet_trailing_links_stripped) > 0.5:
                         length_threshold = 95
                     else:
-                        length_threshold = 230
+                        length_threshold = 240
 
                     if len(tweet_trailing_links_stripped) > length_threshold:
                         await self.send_message(message.channel, "Full tweet:\n```{}```".format(tweet["full_text"]))
