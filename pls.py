@@ -107,7 +107,7 @@ class Pls(discord.Client):
     async def _load_tweet(self, tweet_id, retries=5):
         """Attempts to load a tweet from the twitter API. Returns None on failure.
         """
-         # if we couldn't connect to twitter, no point even trying anything  beyond here :3
+         # if we couldn't connect to twitter, no point even trying anything beyond here :3
         if self._twitter:
             while retries > 0:
                 retries -= 1
@@ -124,6 +124,8 @@ class Pls(discord.Client):
         # Discord truncates tweets in its previews, but if we handle them here we can detect that and send the full tweet.
         for embed in message.embeds:
             if (message.id, embed) not in self._processed_embeds:
+                # do this early so different threads are less likely to process the same embed
+                self._processed_embeds.append((message.id, embed))
                 url = embed.get("url")
 
                 if url:
@@ -140,13 +142,11 @@ class Pls(discord.Client):
                             if tweet.get("extended_entities") and \
                                tweet["extended_entities"].get("media") and \
                                tweet["extended_entities"]["media"][0]["type"] == "photo":
-                                tweet_text = tweet_text.rsplit(" https://t.co/", 1)[0]
+                                tweet_text = tweet_text.rsplit(" https://t.co/", 1)[0].strip()
 
-                            if tweet_text != embed.get("description", ""):
+                            if tweet_text != embed.get("description", "").strip():
                                 await self.send_message(message.channel, "Full tweet:\n```{}```".format(tweet["full_text"]))
                                 self._logger.debug("Sent untruncated version of tweet {}.".format(tweet_id))
-
-            self._processed_embeds.append((message.id, embed))
 
 
     async def _event_on_message(self, message):
