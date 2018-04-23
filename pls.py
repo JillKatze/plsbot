@@ -136,8 +136,10 @@ class Pls(discord.Client):
                         if tweet:
                             tweet_text = tweet["full_text"]
 
-                            # if a tweet has media attached, the final t.co link will be for those, and we should strip it
-                            if tweet.get("extended_entities") and tweet["extended_entities"].get("media"):
+                            # if a tweet has a picture attached, the final t.co link will be for those, and we should strip it because Discord does
+                            if tweet.get("extended_entities") and \
+                               tweet["extended_entities"].get("media") and \
+                               tweet["extended_entities"]["media"][0]["type"] == "photo":
                                 tweet_text = tweet_text.rsplit(" https://t.co/", 1)[0]
 
                             if tweet_text != embed.get("description", ""):
