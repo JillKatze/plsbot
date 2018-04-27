@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import html
 import json
 import logging
 import os
@@ -136,7 +137,7 @@ class Pls(discord.Client):
                         tweet = await self._load_tweet(tweet_id)
 
                         if tweet:
-                            tweet_text = tweet["full_text"]
+                            tweet_text = html.unescape(tweet["full_text"])
 
                             # if a tweet has a picture attached, the final t.co link will be for those, and we should strip it because Discord does
                             if tweet.get("extended_entities") and \
